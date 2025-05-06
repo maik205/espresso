@@ -1,4 +1,4 @@
-use std::{ sync::{ mpsc, Arc, Mutex }, thread };
+use std::{ sync::{ mpsc::{ self, Receiver, Sender }, Arc, Mutex }, thread::{ self, JoinHandle } };
 
 /// ## Info
 /// The thread pool holds a number of threads to process web requests concurrently
@@ -16,7 +16,7 @@ struct Worker {
 }
 /// A worker-state based thread pool implementation
 /// ## Pros:
-/// - Health-checkable (% of workers busy) for scaling
+/// - Health-checkable (% of workers busy) for scaling and sharding if necessary
 /// ## Cons:
 /// Checks incur too much runtime cost due to high Mutex usage.
 impl ThreadPool {
@@ -84,5 +84,50 @@ impl Worker {
             busy: Arc::clone(&busy_arc),
             work_chann: tx,
         }
+    }
+}
+
+pub struct ThreadPoolWorkStealing {
+    workers: Vec<WorkerWS>,
+    work_sender: Sender<Box<dyn FnOnce() + Send + 'static>>,
+}
+impl ThreadPoolWorkStealing {
+    pub fn new(size: usize) -> ThreadPoolWorkStealing {
+        let (tx, rx) = mpsc::channel();
+        let work_receiver: Arc<Mutex<Receiver<Box<dyn FnOnce() + Send + 'static>>>> = Arc::new(
+            Mutex::new(rx)
+        );
+        let mut workers: Vec<WorkerWS> = Vec::new();
+        for i in 0..size {
+            workers.push(WorkerWS::new(i, &work_receiver));
+        }
+        ThreadPoolWorkStealing { workers, work_sender: tx }
+    }
+    pub fn execute<Fn>(&self, work: Fn) where Fn: FnOnce() + Send + 'static {
+        self.work_sender
+            .send(Box::new(work))
+            .expect("Work was not sent to the common work channel.");
+    }
+}
+struct WorkerWS {
+    id: usize,
+    thread: JoinHandle<()>,
+}
+impl WorkerWS {
+    pub fn new(
+        id: usize,
+        recv: &Arc<Mutex<Receiver<Box<dyn FnOnce() + Send + 'static>>>>
+    ) -> WorkerWS {
+        let binding = Arc::clone(recv);
+
+        let thread = thread::spawn(move || {
+            let work_stream = binding.lock().unwrap();
+            while let Ok(work) = work_stream.recv() {
+                println!("Thread {id} received work");
+                work();
+            }
+        });
+
+        WorkerWS { id, thread }
     }
 }
