@@ -1,16 +1,28 @@
-use std::fs;
+use std::{ fs, thread };
 use std::io::BufReader;
 use std::net::{ TcpListener, TcpStream };
 use std::io::prelude::{ *, BufRead };
+use std::sync::{ Arc, Mutex };
+use std::time::Duration;
+
+use threads::stream_threads::ThreadPool;
 mod threads;
 
 fn main() {
-    let addr = "127.0.0.1:6969";
-    let listener = TcpListener::bind(addr).unwrap();
-    for stream in listener.incoming() {
-        let stream = stream.unwrap();
-        handle_connection(stream);
-    }
+    let pool = ThreadPool::new(2);
+    let result = Arc::new(Mutex::new(0));
+    let t1 = Arc::clone(&result);
+    let t2 = Arc::clone(&result);
+    pool.execute(move || {
+        thread::sleep(Duration::from_millis(2000));
+        *t1.lock().unwrap() += 1;
+    });
+    pool.execute(move || {
+        thread::sleep(Duration::from_millis(1000));
+        *t2.lock().unwrap() += 1;
+    });
+    thread::sleep(Duration::from_millis(2110));
+    assert!(*result.lock().unwrap() == 2);
 }
 
 fn handle_connection(mut stream: TcpStream) {
