@@ -1,6 +1,6 @@
 use std::{ sync::{ mpsc, Mutex, MutexGuard }, thread };
 
-use super::Job;
+use super::{ Job, TPool };
 
 struct LockingJob<'a> {
     job: Job,
@@ -28,8 +28,8 @@ struct Worker {
 /// - Health-checkable (% of workers busy) for scaling and sharding if necessary
 /// ## Cons:
 /// Checks incur too much runtime cost due to high Mutex usage.
-impl ThreadPool {
-    pub fn new(threads_num: usize) -> ThreadPool {
+impl TPool for ThreadPool {
+    fn new(threads_num: usize) -> ThreadPool {
         assert!(threads_num > 0);
 
         let mut workers: Vec<Mutex<Worker>> = vec![];
@@ -40,7 +40,7 @@ impl ThreadPool {
         ThreadPool { workers }
     }
 
-    pub fn execute<Fn>(&self, task: Fn) -> () where Fn: FnOnce() + Send + 'static {
+    fn exec<Fn>(&self, task: Fn) -> () where Fn: FnOnce() + Send + 'static {
         let mut task_box = Some(Box::new(task));
         loop {
             for worker in &self.workers {

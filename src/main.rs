@@ -1,23 +1,33 @@
 use std::{ fs, thread };
 use std::io::BufReader;
-use std::net::{ TcpListener, TcpStream };
+use std::net::TcpStream;
 use std::io::prelude::{ *, BufRead };
 use std::sync::{ Arc, Mutex };
 use std::time::Duration;
 
+use espresso::Espresso;
 use threads::stream_threads::ThreadPool;
+use threads::TPool;
+mod espresso;
 mod threads;
 
 fn main() {
+    let app = Espresso::new("localhost:4200");
+    app.get("/", |request, response| {
+        response.write("hello world");
+    });
+
+
+
     let pool = ThreadPool::new(2);
     let result = Arc::new(Mutex::new(0));
     let t1 = Arc::clone(&result);
     let t2 = Arc::clone(&result);
-    pool.execute(move || {
+    pool.exec(move || {
         thread::sleep(Duration::from_millis(2000));
         *t1.lock().unwrap() += 1;
     });
-    pool.execute(move || {
+    pool.exec(move || {
         thread::sleep(Duration::from_millis(1000));
         *t2.lock().unwrap() += 1;
     });

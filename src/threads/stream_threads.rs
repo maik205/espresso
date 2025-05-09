@@ -1,16 +1,13 @@
-use std::{
-    sync::{ mpsc::{ self, Receiver, Sender }, Arc, Mutex, MutexGuard },
-    thread::{ self, JoinHandle },
-};
+use std::{ sync::{ mpsc::{ self, Receiver, Sender }, Arc, Mutex }, thread::{ self, JoinHandle } };
 
-use super::Job;
+use super::{ Job, TPool };
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
     work_sender: Option<Sender<Job>>,
 }
-impl ThreadPool {
-    pub fn new(size: usize) -> ThreadPool {
+impl TPool for ThreadPool {
+    fn new(size: usize) -> ThreadPool {
         let (tx, rx): (
             Sender<Box<dyn FnOnce() + Send + 'static>>,
             Receiver<Box<dyn FnOnce() + Send + 'static>>,
@@ -22,9 +19,10 @@ impl ThreadPool {
         }
         ThreadPool { workers, work_sender: Some(tx) }
     }
-    pub fn execute<Fn>(&self, work: Fn) where Fn: FnOnce() + Send + 'static {
+    fn exec<Fn>(&self, work: Fn) where Fn: FnOnce() + Send + 'static {
         match &self.work_sender {
             Some(sender) => {
+                println!("Sent work");
                 sender.send(Box::new(work)).unwrap();
             }
             _ => (),
@@ -37,11 +35,15 @@ struct Worker {
 }
 impl Worker {
     pub fn new(id: usize, recv: &Arc<Mutex<Receiver<Job>>>) -> Worker {
-        let recv = Arc::clone(recv);
+        let recv: Arc<Mutex<Receiver<Box<dyn FnOnce() + Send + 'static>>>> = Arc::clone(recv);
+
         let thread = thread::spawn(move || {
             loop {
-                match recv.lock().unwrap().recv() {
+                // This acquires and unwraps the value of the Mutex lock fyi
+                let message = recv.lock().unwrap().recv();
+                match message {
                     Ok(job) => {
+                        println!("Thread {id} working");
                         job();
                     }
                     Err(_) => {
