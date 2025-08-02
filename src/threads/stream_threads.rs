@@ -22,7 +22,6 @@ impl TPool for ThreadPool {
     fn exec<Fn>(&self, work: Fn) where Fn: FnOnce() + Send + 'static {
         match &self.work_sender {
             Some(sender) => {
-                println!("Sent work");
                 sender.send(Box::new(work)).unwrap();
             }
             _ => (),
@@ -43,7 +42,6 @@ impl Worker {
                 let message = recv.lock().unwrap().recv();
                 match message {
                     Ok(job) => {
-                        println!("Thread {id} working");
                         job();
                     }
                     Err(_) => {

@@ -1,22 +1,32 @@
 use core::panic;
-use std::{
-    collections::HashMap,
-    io::{ BufReader, Read },
-    net::{ TcpListener, TcpStream },
-    pin::Pin,
-    sync::Arc,
+use std::{ collections::HashMap, net::{ TcpListener, TcpStream }, sync::Arc };
+
+use crate::{
+    error::EspressoProcessingError,
+    request::{ EspressoRequest, EspressoStream, RequestMethod },
+    response::{ EspressoResponse, ResponseWriter },
+    threads::{ stream_threads::ThreadPool, TPool },
 };
 
-use crate::{ error::EspressoRequestError, request::EspressoRequest, response::EspressoResponse };
-
-pub type RequestHandler = Pin<
-    Box<dyn FnMut(EspressoRequest, &mut EspressoResponse) + Send + 'static>
+pub type RequestHandler = Box<
+    dyn Fn(&EspressoRequest, &mut EspressoResponse) + Send + Sync + 'static
 >;
-
+pub type MethodHandlers = HashMap<String, Arc<RequestHandler>>;
 pub struct Espresso {
     addr: String,
     tcp_listener: TcpListener,
-    request_handlers: Arc<HashMap<String, Box<[RequestHandler]>>>,
+    /// HM of Request Type => Route => Route handler
+    method_handlers: HashMap<RequestMethod, MethodHandlers>,
+    thread_pool: ThreadPool,
+    global_handlers: MethodHandlers,
+    internal: Option<Arc<EspressoInternal>>,
+}
+
+/// Internal struct to hold ownership of the methods available to be after a `listen()` call.
+/// This is for cross-thread access purposes. We do not need mutability of the variables after `listen()`
+struct EspressoInternal {
+    all: Box<[(String, Arc<RequestHandler>)]>,
+    methods: HashMap<RequestMethod, HashMap<String, Arc<RequestHandler>>>,
 }
 
 type EspressoMiddleware = Box<dyn FnMut(EspressoRequest) + Send + 'static>;
@@ -25,55 +35,100 @@ impl Espresso {
     pub fn new(addr: &str) -> Espresso {
         let tcp_listener: TcpListener = match TcpListener::bind(addr) {
             Ok(listener) => listener,
-            Err(err) => {
+            Err(_) => {
                 panic!("Error occurred while binding to {addr}");
             }
         };
         Espresso {
             addr: addr.to_string(),
             tcp_listener,
-            request_handlers: Arc::new(HashMap::new()),
+            method_handlers: HashMap::new(),
+            thread_pool: ThreadPool::new(100),
+            global_handlers: HashMap::new(),
+            internal: None,
         }
     }
-    fn handle_request(mut stream: TcpStream) {}
-
-    pub fn get(
+    pub fn all(
         &mut self,
         pattern: &str,
-        request_handler: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) +
-            Send +
-            'static
-    ) -> () {}
-    pub fn post(
-        &self,
-        pattern: &str,
-        request_handler: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) +
-            Send +
-            'static
-    ) -> () {}
-    pub fn put(
-        &self,
-        pattern: &str,
-        request_handler: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) +
-            Send +
-            'static
-    ) -> () {}
-    pub fn delete(
-        &self,
-        pattern: &str,
-        request_handler: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) +
-            Send +
-            'static
-    ) -> () {
-        self.common(request_handler);
+        request_handler: impl Fn(&EspressoRequest, &mut EspressoResponse) + Send + Sync + 'static
+    ) {
+        self.global_handlers.insert(pattern.to_string(), Arc::new(Box::new(request_handler)));
     }
 
-    fn common(
-        &self,
-        request_handler: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) +
-            Send +
-            'static
-    ) {}
-    // Can't use use because it is a Rust language word.
-    pub fn middleware(&mut self, middleware: EspressoMiddleware) -> () {}
+    // fn register_fn_handler(
+    //     &mut self,
+    //     pattern: &str,
+    //     method: RequestMethod,
+    //     handle_func: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) + Send + 'static
+    // ) {}
+
+    pub fn listen(&mut self) {
+        self.internal = Some(
+            Arc::new(EspressoInternal {
+                all: {
+                    let rv: Vec<(String, Arc<RequestHandler>)> = Vec::new();
+                    rv.as_slice().into()
+                },
+                methods: self.method_handlers.clone(),
+            })
+        );
+        for stream in self.tcp_listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    self.handle_stream(stream);
+                }
+                Err(_) => {
+                    println!("Error during handshake.");
+                }
+            }
+        }
+    }
+
+    pub fn handle_stream(&self, tcp_stream: TcpStream) -> Result<(), EspressoProcessingError> {
+        let i = Arc::clone(match &self.internal {
+            Some(reference) => reference,
+            None => {
+                return Err(EspressoProcessingError::HandleBeforeListen);
+            }
+        });
+
+        self.thread_pool.exec(move || {
+            let mut stream = EspressoStream::new(tcp_stream);
+            // Cook up a new response in the thread
+            let global_handlers = &i.all;
+            for (request, mut rwrite) in stream {
+                let mut response = EspressoResponse::new();
+
+                for (l, handle_fn) in global_handlers {
+                    if request.resource.eq(l) {
+                        handle_fn(&request, &mut response);
+                    }
+                }
+                match request.method {
+                    RequestMethod::GET => {
+                        (
+                            {
+                                let this: Option<&mut ResponseWriter> = Arc::get_mut(&mut rwrite);
+                                match this {
+                                    Some(val) => val,
+                                    None => {
+                                        println!("I can't do this");
+                                        panic!();
+                                    }
+                                }
+                            }
+                        ).write_response(response);
+                    }
+                    RequestMethod::POST => todo!(),
+                    RequestMethod::PUT => todo!(),
+                    RequestMethod::DELETE => todo!(),
+                }
+            }
+        });
+        Ok(())
+    }
+
+    // Can't use `use` because it is a Rust language word.
+    // pub fn middleware(&mut self, middleware: EspressoMiddleware) -> () {}
 }

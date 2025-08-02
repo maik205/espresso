@@ -4,3 +4,8 @@ pub enum EspressoRequestError {
     IncompleteRequest(String),
 
 }
+
+pub enum EspressoProcessingError {
+    HandleBeforeListen,
+    FailedThreadPool
+}

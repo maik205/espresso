@@ -21,7 +21,7 @@ pub fn thread_pool_should_process_asynchronously() {
 
 #[test]
 pub fn thread_pool_should_be_decently_performant() {
-    let pool = pigeonhole_threads::ThreadPool::new(100);
+    let pool = stream_threads::ThreadPool::new(100);
     let result = Arc::new(Mutex::new(0));
     for _ in 0..1000000 {
         let t = Arc::clone(&result);
