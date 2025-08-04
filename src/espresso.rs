@@ -13,9 +13,8 @@ pub type RequestHandler = Box<
 >;
 pub type MethodHandlers = HashMap<String, Arc<RequestHandler>>;
 pub struct Espresso {
-    addr: String,
     tcp_listener: TcpListener,
-    /// HM of Request Type => Route => Route handler
+    /// HM of Request Type => Pattern => Route handler
     method_handlers: HashMap<RequestMethod, MethodHandlers>,
     thread_pool: ThreadPool,
     global_handlers: MethodHandlers,
@@ -40,7 +39,6 @@ impl Espresso {
             }
         };
         Espresso {
-            addr: addr.to_string(),
             tcp_listener,
             method_handlers: HashMap::new(),
             thread_pool: ThreadPool::new(100),
@@ -56,12 +54,12 @@ impl Espresso {
         self.global_handlers.insert(pattern.to_string(), Arc::new(Box::new(request_handler)));
     }
 
-    // fn register_fn_handler(
-    //     &mut self,
-    //     pattern: &str,
-    //     method: RequestMethod,
-    //     handle_func: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) + Send + 'static
-    // ) {}
+    fn register_fn_handler(
+        &mut self,
+        pattern: &str,
+        method: RequestMethod,
+        handle_func: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) + Send + 'static
+    ) {}
 
     pub fn listen(&mut self) {
         self.internal = Some(
@@ -94,10 +92,10 @@ impl Espresso {
         });
 
         self.thread_pool.exec(move || {
-            let mut stream = EspressoStream::new(tcp_stream);
+            let stream = EspressoStream::new(tcp_stream);
             // Cook up a new response in the thread
             let global_handlers = &i.all;
-            for (request, mut rwrite) in stream {
+            for (request, rwrite) in stream {
                 let mut response = EspressoResponse::new();
 
                 for (l, handle_fn) in global_handlers {
@@ -107,18 +105,13 @@ impl Espresso {
                 }
                 match request.method {
                     RequestMethod::GET => {
-                        (
-                            {
-                                let this: Option<&mut ResponseWriter> = Arc::get_mut(&mut rwrite);
-                                match this {
-                                    Some(val) => val,
-                                    None => {
-                                        println!("I can't do this");
-                                        panic!();
-                                    }
-                                }
-                            }
-                        ).write_response(response);
+                        let mut rwrite = rwrite.borrow_mut();
+                        let rwrite = Arc::get_mut(&mut rwrite);
+                        if let Some(rwrite) = rwrite {
+                            rwrite.write_response(response);
+                        } else {
+                            println!("The writer has more than one reference bozo!");
+                        }
                     }
                     RequestMethod::POST => todo!(),
                     RequestMethod::PUT => todo!(),

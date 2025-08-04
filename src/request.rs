@@ -3,12 +3,13 @@ use std::{
     collections::HashMap,
     fmt::format,
     io::{ BufRead, BufReader, Read },
+    marker::PhantomData,
     net::TcpStream,
     sync::Arc,
 };
 use atoi::atoi;
 
-use crate::{ error::EspressoRequestError, response::ResponseWriter };
+use crate::{ error::EspressoRequestError, espresso::Espresso, response::ResponseWriter };
 #[derive(Clone)]
 pub enum RequestMethod {
     GET,
@@ -17,26 +18,44 @@ pub enum RequestMethod {
     DELETE,
 }
 
-pub struct EspressoStream {
+pub struct EspressoStream<'a> {
+    phantom: PhantomData<&'a ResponseWriter>,
     reader: BufReader<TcpStream>,
-    writer: Arc<ResponseWriter>,
+    writer: ResponseWriter,
+    tcp: TcpStream,
 }
 
-impl EspressoStream {
+impl EspressoStream<'_> {
     /// Creates a new [`EspressoStream`] wrapping the underlying [`TcpStream`] and provides a [`BufReader`] and [`ResponseWriter`] instance.
-    pub fn new(tcp_stream: TcpStream) -> EspressoStream {
+    pub fn new(tcp_stream: TcpStream) -> EspressoStream<'_> {
         // These references are essentially the same underlying TcpStream.
         let read_stream = tcp_stream.try_clone().expect("The TCP stream was unable to be cloned.");
         let write_stream = tcp_stream.try_clone().expect("The TCP stream was unable to be cloned.");
         EspressoStream {
             reader: BufReader::new(read_stream),
-            writer: Arc::new(ResponseWriter::new(write_stream)),
+            writer: ResponseWriter::new(write_stream),
+            phantom: PhantomData,
+            tcp: tcp_stream.try_clone().expect("Unable to clone the TCP stream."),
+        }
+    }
+
+    pub fn clone(&self) -> EspressoStream {
+        EspressoStream {
+            phantom: PhantomData,
+            reader: BufReader::new(self.tcp.try_clone().unwrap()),
+            writer: ResponseWriter::new(self.tcp.try_clone().unwrap()),
+            tcp: self.tcp.try_clone().unwrap(),
         }
     }
 }
 
-impl Iterator for EspressoStream {
-    type Item = (EspressoRequest, Arc<ResponseWriter>);
+struct EspressoStreamFrame<'a> {
+    request: EspressoRequest,
+    stream_ref: &'a mut EspressoStream<'a>,
+}
+
+impl<'stream_lifetime> Iterator for EspressoStream<'stream_lifetime> {
+    type Item = EspressoStreamFrame<'stream_lifetime>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let body: String = String::new();
@@ -82,17 +101,17 @@ impl Iterator for EspressoStream {
             }
         } else {
         }
-
-        Some((
-            EspressoRequest {
+        let mut cloned_stream = self.clone();
+        Some(EspressoStreamFrame {
+            request: EspressoRequest {
                 headers,
                 method,
                 resource: resource.to_string(),
                 protocol_ver: protocol.to_string(),
                 body: Some(body),
             },
-            Arc::clone(&self.writer),
-        ))
+            stream_ref: &mut cloned_stream,
+        })
     }
 }
 

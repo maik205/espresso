@@ -45,7 +45,7 @@ impl<'a> ResponseWriter {
         ResponseWriter { buffer: Vec::new(), tcp_stream: stream }
     }
 
-    pub fn write_buffer_to_connection(&mut self) -> Result<usize, EspressoResponseError> {
+    pub fn flush(&mut self) -> Result<usize, EspressoResponseError> {
         match std::io::Write::write_all(&mut self.tcp_stream, self.buffer.as_ref()) {
             Ok(()) => {
                 let wrote = self.buffer.len();
@@ -61,7 +61,7 @@ impl<'a> ResponseWriter {
     }
 
     pub fn write_response(&mut self, response: EspressoResponse) {
-        self.write_string(format!("HTTP/1.1 {} {}\r\n", response.status, response.message));
+        self.write_string(format!("HTTP/2 {} {}\r\n", response.status, response.message));
         if let None = response.headers.get("CONTENT-LENGTH") {
             self.write_string(format!("Content-Length: {}", response.body.len()));
         }
@@ -70,7 +70,7 @@ impl<'a> ResponseWriter {
         }
         self.write_str("\r\n");
         self.write_str(&response.body);
-        self.write_buffer_to_connection();
+        self.flush();
         self.clear();
     }
 }
