@@ -65,8 +65,12 @@ impl Espresso {
         self.internal = Some(
             Arc::new(EspressoInternal {
                 all: {
-                    let rv: Vec<(String, Arc<RequestHandler>)> = Vec::new();
-                    rv.as_slice().into()
+                    let mut global_handles: Vec<(String, Arc<RequestHandler>)> = Vec::new();
+                    let global_handler_map = self.global_handlers.clone();
+                    for (key, value) in global_handler_map {
+                        global_handles.push((key, value));
+                    }
+                    global_handles.as_slice().into()
                 },
                 methods: self.method_handlers.clone(),
             })
@@ -92,30 +96,31 @@ impl Espresso {
         });
 
         self.thread_pool.exec(move || {
-            let stream = EspressoStream::new(tcp_stream);
+            let mut stream = EspressoStream::new(tcp_stream);
             // Cook up a new response in the thread
             let global_handlers = &i.all;
-            for (request, rwrite) in stream {
-                let mut response = EspressoResponse::new();
+            loop {
+                if let Some(frame) = stream.next() {
+                    let request = frame.request;
+                    let mut response = EspressoResponse::new();
 
-                for (l, handle_fn) in global_handlers {
-                    if request.resource.eq(l) {
-                        handle_fn(&request, &mut response);
-                    }
-                }
-                match request.method {
-                    RequestMethod::GET => {
-                        let mut rwrite = rwrite.borrow_mut();
-                        let rwrite = Arc::get_mut(&mut rwrite);
-                        if let Some(rwrite) = rwrite {
-                            rwrite.write_response(response);
-                        } else {
-                            println!("The writer has more than one reference bozo!");
+                    for (l, handle_fn) in global_handlers {
+                        println!("{}", l);
+                        if request.resource.eq(l) {
+                            handle_fn(&request, &mut response);
                         }
                     }
-                    RequestMethod::POST => todo!(),
-                    RequestMethod::PUT => todo!(),
-                    RequestMethod::DELETE => todo!(),
+                    match request.method {
+                        RequestMethod::GET => {
+                            let mut rwrite = &mut stream.writer;
+                            rwrite.write_response(response);
+                        }
+                        RequestMethod::POST => todo!(),
+                        RequestMethod::PUT => todo!(),
+                        RequestMethod::DELETE => todo!(),
+                    }
+                } else {
+                    break;
                 }
             }
         });

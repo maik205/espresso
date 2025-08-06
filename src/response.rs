@@ -61,7 +61,8 @@ impl<'a> ResponseWriter {
     }
 
     pub fn write_response(&mut self, response: EspressoResponse) {
-        self.write_string(format!("HTTP/2 {} {}\r\n", response.status, response.message));
+        self.write_string(format!("HTTP/1.1 {} {}\r\n", response.status, response.message));
+        println!("{}", response.body);
         if let None = response.headers.get("CONTENT-LENGTH") {
             self.write_string(format!("Content-Length: {}", response.body.len()));
         }
@@ -69,8 +70,12 @@ impl<'a> ResponseWriter {
             self.write_string(format!("{}: {}\r\n", head_name, head_content));
         }
         self.write_str("\r\n");
+        self.write_str("\r\n");
+
         self.write_str(&response.body);
-        self.flush();
+        if let Err(err) = self.flush() {
+            println!("{:?}", err);
+        }
         self.clear();
     }
 }
@@ -118,6 +123,7 @@ impl Serialize for ResponseWriter {
     }
 }
 
+#[derive(Debug)]
 pub enum EspressoResponseError {
     BufferError,
     Unknown,

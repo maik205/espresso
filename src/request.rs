@@ -18,30 +18,26 @@ pub enum RequestMethod {
     DELETE,
 }
 
-pub struct EspressoStream<'a> {
-    phantom: PhantomData<&'a ResponseWriter>,
+pub struct EspressoStream {
     reader: BufReader<TcpStream>,
-    writer: ResponseWriter,
+    pub writer: ResponseWriter,
     tcp: TcpStream,
 }
-
-impl EspressoStream<'_> {
+impl EspressoStream {
     /// Creates a new [`EspressoStream`] wrapping the underlying [`TcpStream`] and provides a [`BufReader`] and [`ResponseWriter`] instance.
-    pub fn new(tcp_stream: TcpStream) -> EspressoStream<'_> {
+    pub fn new(tcp_stream: TcpStream) -> EspressoStream {
         // These references are essentially the same underlying TcpStream.
         let read_stream = tcp_stream.try_clone().expect("The TCP stream was unable to be cloned.");
         let write_stream = tcp_stream.try_clone().expect("The TCP stream was unable to be cloned.");
         EspressoStream {
             reader: BufReader::new(read_stream),
             writer: ResponseWriter::new(write_stream),
-            phantom: PhantomData,
             tcp: tcp_stream.try_clone().expect("Unable to clone the TCP stream."),
         }
     }
 
     pub fn clone(&self) -> EspressoStream {
         EspressoStream {
-            phantom: PhantomData,
             reader: BufReader::new(self.tcp.try_clone().unwrap()),
             writer: ResponseWriter::new(self.tcp.try_clone().unwrap()),
             tcp: self.tcp.try_clone().unwrap(),
@@ -49,15 +45,12 @@ impl EspressoStream<'_> {
     }
 }
 
-struct EspressoStreamFrame<'a> {
-    request: EspressoRequest,
-    stream_ref: &'a mut EspressoStream<'a>,
+pub struct EspressoStreamFrame {
+    pub request: EspressoRequest,
 }
 
-impl<'stream_lifetime> Iterator for EspressoStream<'stream_lifetime> {
-    type Item = EspressoStreamFrame<'stream_lifetime>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl EspressoStream {
+    pub fn next(&mut self) -> Option<EspressoStreamFrame> {
         let body: String = String::new();
         let mut headers: HashMap<String, String> = HashMap::new();
 
@@ -110,7 +103,6 @@ impl<'stream_lifetime> Iterator for EspressoStream<'stream_lifetime> {
                 protocol_ver: protocol.to_string(),
                 body: Some(body),
             },
-            stream_ref: &mut cloned_stream,
         })
     }
 }
