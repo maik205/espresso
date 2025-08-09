@@ -1,16 +1,19 @@
 use core::panic;
-use std::{ collections::HashMap, net::{ TcpListener, TcpStream }, sync::Arc };
+use std::{
+    collections::HashMap,
+    net::{TcpListener, TcpStream},
+    sync::Arc,
+};
 
 use crate::{
     error::EspressoProcessingError,
-    request::{ EspressoRequest, EspressoStream, RequestMethod },
-    response::{ EspressoResponse, ResponseWriter },
-    threads::{ stream_threads::ThreadPool, TPool },
+    request::{EspressoRequest, EspressoStream, RequestMethod},
+    response::EspressoResponse,
+    threads::{stream_threads::ThreadPool, TPool},
 };
 
-pub type RequestHandler = Box<
-    dyn Fn(&EspressoRequest, &mut EspressoResponse) + Send + Sync + 'static
->;
+pub type RequestHandler =
+    Box<dyn Fn(&EspressoRequest, &mut EspressoResponse) + Send + Sync + 'static>;
 pub type MethodHandlers = HashMap<String, Arc<RequestHandler>>;
 pub struct Espresso {
     tcp_listener: TcpListener,
@@ -49,32 +52,32 @@ impl Espresso {
     pub fn all(
         &mut self,
         pattern: &str,
-        request_handler: impl Fn(&EspressoRequest, &mut EspressoResponse) + Send + Sync + 'static
+        request_handler: impl Fn(&EspressoRequest, &mut EspressoResponse) + Send + Sync + 'static,
     ) {
-        self.global_handlers.insert(pattern.to_string(), Arc::new(Box::new(request_handler)));
+        self.global_handlers
+            .insert(pattern.to_string(), Arc::new(Box::new(request_handler)));
     }
 
     fn register_fn_handler(
         &mut self,
         pattern: &str,
         method: RequestMethod,
-        handle_func: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) + Send + 'static
-    ) {}
+        handle_func: impl (FnMut(&EspressoRequest, &mut EspressoResponse) -> ()) + Send + 'static,
+    ) {
+    }
 
     pub fn listen(&mut self) {
-        self.internal = Some(
-            Arc::new(EspressoInternal {
-                all: {
-                    let mut global_handles: Vec<(String, Arc<RequestHandler>)> = Vec::new();
-                    let global_handler_map = self.global_handlers.clone();
-                    for (key, value) in global_handler_map {
-                        global_handles.push((key, value));
-                    }
-                    global_handles.as_slice().into()
-                },
-                methods: self.method_handlers.clone(),
-            })
-        );
+        self.internal = Some(Arc::new(EspressoInternal {
+            all: {
+                let mut global_handles: Vec<(String, Arc<RequestHandler>)> = Vec::new();
+                let global_handler_map = self.global_handlers.clone();
+                for (key, value) in global_handler_map {
+                    global_handles.push((key, value));
+                }
+                global_handles.as_slice().into()
+            },
+            methods: self.method_handlers.clone(),
+        }));
         for stream in self.tcp_listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -105,19 +108,21 @@ impl Espresso {
                     let mut response = EspressoResponse::new();
 
                     for (l, handle_fn) in global_handlers {
-                        println!("{}", l);
                         if request.resource.eq(l) {
                             handle_fn(&request, &mut response);
                         }
                     }
                     match request.method {
                         RequestMethod::GET => {
-                            let mut rwrite = &mut stream.writer;
+                            let rwrite = &mut stream.writer;
                             rwrite.write_response(response);
                         }
                         RequestMethod::POST => todo!(),
                         RequestMethod::PUT => todo!(),
                         RequestMethod::DELETE => todo!(),
+                        RequestMethod::PATCH => todo!(),
+                        RequestMethod::OPTIONS => todo!(),
+                        RequestMethod::HEAD => todo!(),
                     }
                 } else {
                     break;

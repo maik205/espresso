@@ -62,7 +62,6 @@ impl<'a> ResponseWriter {
 
     pub fn write_response(&mut self, response: EspressoResponse) {
         self.write_string(format!("HTTP/1.1 {} {}\r\n", response.status, response.message));
-        println!("{}", response.body);
         if let None = response.headers.get("CONTENT-LENGTH") {
             self.write_string(format!("Content-Length: {}", response.body.len()));
         }

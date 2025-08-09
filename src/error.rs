@@ -7,5 +7,6 @@ pub enum EspressoRequestError {
 
 pub enum EspressoProcessingError {
     HandleBeforeListen,
-    FailedThreadPool
+    FailedThreadPool,
+    ConnectionClosed
 }

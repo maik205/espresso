@@ -1,21 +1,23 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    fmt::format,
-    io::{ BufRead, BufReader, Read },
-    marker::PhantomData,
-    net::TcpStream,
-    sync::Arc,
-};
 use atoi::atoi;
+use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader, Read},
+    net::TcpStream,
+};
 
-use crate::{ error::EspressoRequestError, espresso::Espresso, response::ResponseWriter };
+use crate::{
+    error::{EspressoProcessingError, EspressoRequestError},
+    response::ResponseWriter,
+};
 #[derive(Clone)]
 pub enum RequestMethod {
     GET,
     POST,
     PUT,
+    PATCH,
     DELETE,
+    OPTIONS,
+    HEAD,
 }
 
 pub struct EspressoStream {
@@ -27,21 +29,35 @@ impl EspressoStream {
     /// Creates a new [`EspressoStream`] wrapping the underlying [`TcpStream`] and provides a [`BufReader`] and [`ResponseWriter`] instance.
     pub fn new(tcp_stream: TcpStream) -> EspressoStream {
         // These references are essentially the same underlying TcpStream.
-        let read_stream = tcp_stream.try_clone().expect("The TCP stream was unable to be cloned.");
-        let write_stream = tcp_stream.try_clone().expect("The TCP stream was unable to be cloned.");
+        let read_stream = tcp_stream
+            .try_clone()
+            .expect("The TCP stream was unable to be cloned.");
+        let write_stream = tcp_stream
+            .try_clone()
+            .expect("The TCP stream was unable to be cloned.");
         EspressoStream {
             reader: BufReader::new(read_stream),
             writer: ResponseWriter::new(write_stream),
-            tcp: tcp_stream.try_clone().expect("Unable to clone the TCP stream."),
+            tcp: tcp_stream
+                .try_clone()
+                .expect("Unable to clone the TCP stream."),
         }
     }
 
-    pub fn clone(&self) -> EspressoStream {
-        EspressoStream {
-            reader: BufReader::new(self.tcp.try_clone().unwrap()),
-            writer: ResponseWriter::new(self.tcp.try_clone().unwrap()),
-            tcp: self.tcp.try_clone().unwrap(),
+    pub fn clone(&self) -> Result<EspressoStream, EspressoProcessingError> {
+        if let (Ok(reader_stream), Ok(writer_stream), Ok(cloned_tcp)) = (
+            self.tcp.try_clone(),
+            self.tcp.try_clone(),
+            self.tcp.try_clone(),
+        ) {
+            return Ok(EspressoStream {
+                reader: BufReader::new(reader_stream),
+                writer: ResponseWriter::new(writer_stream),
+                tcp: cloned_tcp,
+            });
         }
+
+        Err(EspressoProcessingError::ConnectionClosed)
     }
 }
 
@@ -51,12 +67,14 @@ pub struct EspressoStreamFrame {
 
 impl EspressoStream {
     pub fn next(&mut self) -> Option<EspressoStreamFrame> {
-        let body: String = String::new();
+        let mut body: Option<String> = Some(String::new());
         let mut headers: HashMap<String, String> = HashMap::new();
 
         let mut buf: String = String::new();
         let (method, resource, protocol) = {
-            self.reader.read_line(&mut buf).expect("Couldn't read request.");
+            self.reader
+                .read_line(&mut buf)
+                .expect("Couldn't read request.");
             let items: Vec<&str> = buf.split(" ").take(3).collect();
             (
                 match items[0].to_uppercase().as_str() {
@@ -84,24 +102,31 @@ impl EspressoStream {
             }
 
             let header_parts: Vec<&str> = buf.split(": ").collect();
-            headers.insert(header_parts[0].to_uppercase().to_string(), header_parts[1].to_string());
+            headers.insert(
+                header_parts[0].to_uppercase().to_string(),
+                header_parts[1].to_string(),
+            );
         }
         // Reads body
+        let mut body_len: Option<usize> = None;
         if let Some(len_str) = headers.get("CONTENT-LENGTH") {
             if let Some(len) = atoi::<u32>(len_str.as_bytes()) {
                 let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
-                self.reader.read_exact(&mut buf).unwrap();
+                body_len = Some(len.try_into().unwrap());
+                let _ = self.reader.read_exact(&mut buf);
             }
         } else {
+            body.take();
         }
-        let mut cloned_stream = self.clone();
+
         Some(EspressoStreamFrame {
             request: EspressoRequest {
                 headers,
                 method,
                 resource: resource.to_string(),
                 protocol_ver: protocol.to_string(),
-                body: Some(body),
+                body,
+                body_len,
             },
         })
     }
@@ -118,6 +143,7 @@ pub struct EspressoRequest {
     pub resource: String,
     pub protocol_ver: String,
     pub body: Option<String>,
+    pub body_len: Option<usize>,
 }
 
 impl EspressoRequest {
@@ -132,12 +158,15 @@ impl<'a> TryFrom<&'a [u8]> for EspressoRequest {
 
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
         let mut reader = BufReader::new(value);
-        let mut body: String = String::new();
         let mut headers: HashMap<String, String> = HashMap::new();
 
         let mut buf: String = String::new();
         let (method, resource, protocol) = {
-            reader.read_line(&mut buf);
+            if let Err(_err) = reader.read_line(&mut buf) {
+                return Err(EspressoRequestError::MalformedRequest(
+                    "TCP Stream was empty.".to_string(),
+                ));
+            }
             let items: Vec<&str> = buf.split(" ").take(3).collect();
             (
                 match items[0].to_uppercase().as_str() {
@@ -146,11 +175,9 @@ impl<'a> TryFrom<&'a [u8]> for EspressoRequest {
                     "POST" => RequestMethod::POST,
                     "DELETE" => RequestMethod::DELETE,
                     _ => {
-                        return Err(
-                            EspressoRequestError::MalformedRequest(
-                                "Request method not supported".to_string()
-                            )
-                        );
+                        return Err(EspressoRequestError::MalformedRequest(
+                            "Request method not supported".to_string(),
+                        ));
                     }
                 },
                 items[1],
@@ -166,13 +193,17 @@ impl<'a> TryFrom<&'a [u8]> for EspressoRequest {
             let header_parts: Vec<&str> = buf.split(": ").collect();
             headers.insert(
                 header_parts[0].to_ascii_uppercase().to_string(),
-                header_parts[1].to_string()
+                header_parts[1].to_string(),
             );
         }
         // Reads body
+        let mut body: Option<String> = None;
+        let mut body_len: Option<usize> = None;
         buf.clear();
-        reader.read_to_string(&mut buf);
-        body.push_str(buf.as_str());
+        if let Ok(read) = reader.read_to_string(&mut buf) {
+            body = Some(buf);
+            body_len = Some(read);
+        }
 
         // for (ind, line) in reader.lines().enumerate() {
         //     match line {
@@ -240,7 +271,8 @@ impl<'a> TryFrom<&'a [u8]> for EspressoRequest {
             method,
             resource: resource.to_string(),
             protocol_ver: protocol.to_string(),
-            body: Some(body),
+            body,
+            body_len,
         })
     }
 }
