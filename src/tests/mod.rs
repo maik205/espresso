@@ -1,6 +1,10 @@
-use std::{ sync::{ Arc, Mutex }, thread, time::Duration };
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
-use crate::threads::{ pigeonhole_threads, stream_threads, TPool };
+use espresso::threads::{pigeonhole_threads, stream_threads, TPool};
 #[test]
 pub fn thread_pool_should_process_asynchronously() {
     let pool = pigeonhole_threads::ThreadPool::new(2);
