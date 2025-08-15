@@ -78,7 +78,7 @@ impl Espresso {
         for stream in self.tcp_listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    self.handle_stream(stream);
+                    let _ = self.handle_stream(stream);
                 }
                 Err(_) => {
                     println!("Error during handshake.");
