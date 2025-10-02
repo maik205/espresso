@@ -107,6 +107,17 @@ impl EspressoStream {
                 header_parts[1].to_string(),
             );
         }
+        if let None = headers.get("X-Forwarded-For") {
+            headers.insert(
+                "X-Forwarded-For".to_string(),
+                self.tcp
+                    .peer_addr()
+                    .unwrap()
+                    .ip()
+                    .to_canonical()
+                    .to_string(),
+            );
+        }
         // Reads body
         let mut body_len: Option<usize> = None;
         if let Some(len_str) = headers.get("CONTENT-LENGTH") {
@@ -196,6 +207,7 @@ impl<'a> TryFrom<&'a [u8]> for EspressoRequest {
                 header_parts[1].to_string(),
             );
         }
+
         // Reads body
         let mut body: Option<String> = None;
         let mut body_len: Option<usize> = None;
